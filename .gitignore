@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual Environment
+.venv/
+
+# Logs
+logs/
+*.log
+
+# Captures
+captures/
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
