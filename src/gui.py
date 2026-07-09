@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
 )
 
+from settings import SettingsDialog
 
 class MainWindow(QWidget):
     def __init__(self):
@@ -109,7 +110,7 @@ class MainWindow(QWidget):
         # ==========================
         self.start_btn = QPushButton("▶ Start Monitor")
         self.stop_btn = QPushButton("■ Stop")
-        self.setting_btn = QPushButton("📂 Load Chart")
+        self.setting_btn = QPushButton("⚙ Settings")
 
         self.start_btn.setMinimumHeight(40)
         self.stop_btn.setMinimumHeight(40)
@@ -137,8 +138,7 @@ class MainWindow(QWidget):
         # ==========================
         self.start_btn.clicked.connect(self.start_monitor)
         self.stop_btn.clicked.connect(self.stop_monitor)
-        self.setting_btn.clicked.connect(self.load_chart)
-
+        self.setting_btn.clicked.connect(self.open_settings)
         # ==========================
         # Timer
         # ==========================
@@ -168,6 +168,16 @@ class MainWindow(QWidget):
         self.status.setText("🔴 OFFLINE")
         self.status.setStyleSheet("font-size:16px;color:red;")
         self.add_log("監視停止")
+    
+    def open_settings(self):
+        dialog = SettingsDialog()
+
+        if dialog.exec():
+            self.currency.setText(
+                f"通貨 : {dialog.currency.currentText()}"
+            )
+
+            self.add_log("設定を保存しました")
 
     def load_chart(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -195,3 +205,5 @@ class MainWindow(QWidget):
             self.ai_trend.setText("Trend : UP")
             self.ai_confidence.setText("Confidence : 82%")
             self.ai_recommendation.setText("Recommendation : BUY")
+
+          
