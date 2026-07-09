@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from PySide6.QtCore import QTimer
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QWidget,
     QLabel,
@@ -9,6 +10,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QFrame,
+    QGroupBox,
+    QFileDialog,
 )
 
 
@@ -54,6 +57,24 @@ class MainWindow(QWidget):
 
         main_layout.addSpacing(15)
 
+        chart_box = QGroupBox("チャート")
+        chart_layout = QVBoxLayout()
+
+        self.chart_label = QLabel("チャート画像はここに表示されます")
+        self.chart_label.setMinimumHeight(180)
+        self.chart_label.setStyleSheet("""
+            border:1px solid gray;
+            border-radius:6px;
+            background:#2b2b2b;
+            padding:10px;
+        """)
+
+        chart_layout.addWidget(self.chart_label)
+        chart_box.setLayout(chart_layout)
+
+        main_layout.addWidget(chart_box)
+        main_layout.addSpacing(10)
+
         self.start_btn = QPushButton("▶ Start Monitor")
         self.stop_btn = QPushButton("■ Stop")
         self.setting_btn = QPushButton("⚙ Settings")
@@ -81,6 +102,7 @@ class MainWindow(QWidget):
 
         self.start_btn.clicked.connect(self.start_monitor)
         self.stop_btn.clicked.connect(self.stop_monitor)
+        self.setting_btn.clicked.connect(self.load_chart)
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_time)
@@ -108,3 +130,23 @@ class MainWindow(QWidget):
         self.status.setText("🔴 OFFLINE")
         self.status.setStyleSheet("font-size:16px;color:red;")
         self.add_log("監視停止")
+    
+    def load_chart(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "チャート画像を選択",
+            "",
+            "Images (*.png *.jpg *.jpeg)"
+        )
+
+        if file_path:
+            pixmap = QPixmap(file_path)
+
+            self.chart_label.setPixmap(
+                pixmap.scaled(
+                    self.chart_label.width(),
+                    self.chart_label.height()
+                )
+            )
+
+            self.add_log("チャート画像を読み込みました")
