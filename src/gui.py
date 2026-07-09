@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QWidget,
@@ -20,10 +20,13 @@ class MainWindow(QWidget):
         super().__init__()
 
         self.setWindowTitle("IRIS Trade Assistant")
-        self.resize(550, 520)
+        self.resize(700, 750)
 
         main_layout = QVBoxLayout()
 
+        # ==========================
+        # タイトル
+        # ==========================
         title = QLabel("IRIS Trade Assistant")
         title.setStyleSheet("font-size:22px;font-weight:bold;")
 
@@ -41,6 +44,9 @@ class MainWindow(QWidget):
         line.setFrameShape(QFrame.HLine)
         main_layout.addWidget(line)
 
+        # ==========================
+        # 情報
+        # ==========================
         self.time_label = QLabel()
         self.currency = QLabel("通貨 : EUR/USD")
         self.trend = QLabel("トレンド : WAIT")
@@ -55,29 +61,55 @@ class MainWindow(QWidget):
             w.setStyleSheet("font-size:15px;")
             main_layout.addWidget(w)
 
-        main_layout.addSpacing(15)
+        main_layout.addSpacing(10)
 
-        chart_box = QGroupBox("チャート")
+        # ==========================
+        # チャート
+        # ==========================
+        chart_box = QGroupBox("📈 チャート")
         chart_layout = QVBoxLayout()
 
         self.chart_label = QLabel("チャート画像はここに表示されます")
-        self.chart_label.setMinimumHeight(180)
+        self.chart_label.setAlignment(Qt.AlignCenter)
+        self.chart_label.setMinimumHeight(250)
         self.chart_label.setStyleSheet("""
             border:1px solid gray;
             border-radius:6px;
             background:#2b2b2b;
-            padding:10px;
         """)
 
         chart_layout.addWidget(self.chart_label)
         chart_box.setLayout(chart_layout)
 
         main_layout.addWidget(chart_box)
-        main_layout.addSpacing(10)
 
+        # ==========================
+        # AI Analysis
+        # ==========================
+        analysis_box = QGroupBox("🤖 AI Analysis")
+        analysis_layout = QVBoxLayout()
+
+        self.ai_trend = QLabel("Trend : WAIT")
+        self.ai_confidence = QLabel("Confidence : 0%")
+        self.ai_recommendation = QLabel("Recommendation : -")
+
+        for label in (
+            self.ai_trend,
+            self.ai_confidence,
+            self.ai_recommendation,
+        ):
+            label.setStyleSheet("font-size:14px;")
+            analysis_layout.addWidget(label)
+
+        analysis_box.setLayout(analysis_layout)
+        main_layout.addWidget(analysis_box)
+
+        # ==========================
+        # ボタン
+        # ==========================
         self.start_btn = QPushButton("▶ Start Monitor")
         self.stop_btn = QPushButton("■ Stop")
-        self.setting_btn = QPushButton("⚙ Settings")
+        self.setting_btn = QPushButton("📂 Load Chart")
 
         self.start_btn.setMinimumHeight(40)
         self.stop_btn.setMinimumHeight(40)
@@ -87,10 +119,10 @@ class MainWindow(QWidget):
         main_layout.addWidget(self.stop_btn)
         main_layout.addWidget(self.setting_btn)
 
-        main_layout.addSpacing(15)
-
+        # ==========================
+        # ログ
+        # ==========================
         log_title = QLabel("ログ")
-        log_title.setStyleSheet("font-size:16px;font-weight:bold;")
 
         self.log = QTextEdit()
         self.log.setReadOnly(True)
@@ -100,10 +132,16 @@ class MainWindow(QWidget):
 
         self.setLayout(main_layout)
 
+        # ==========================
+        # Signal
+        # ==========================
         self.start_btn.clicked.connect(self.start_monitor)
         self.stop_btn.clicked.connect(self.stop_monitor)
         self.setting_btn.clicked.connect(self.load_chart)
 
+        # ==========================
+        # Timer
+        # ==========================
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_time)
         self.timer.start(1000)
@@ -130,7 +168,7 @@ class MainWindow(QWidget):
         self.status.setText("🔴 OFFLINE")
         self.status.setStyleSheet("font-size:16px;color:red;")
         self.add_log("監視停止")
-    
+
     def load_chart(self):
         file_path, _ = QFileDialog.getOpenFileName(
             self,
@@ -145,8 +183,15 @@ class MainWindow(QWidget):
             self.chart_label.setPixmap(
                 pixmap.scaled(
                     self.chart_label.width(),
-                    self.chart_label.height()
+                    self.chart_label.height(),
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation,
                 )
             )
 
             self.add_log("チャート画像を読み込みました")
+
+            # 仮のAI分析結果
+            self.ai_trend.setText("Trend : UP")
+            self.ai_confidence.setText("Confidence : 82%")
+            self.ai_recommendation.setText("Recommendation : BUY")
