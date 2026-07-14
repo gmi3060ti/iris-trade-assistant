@@ -27,6 +27,8 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QWidget,
     QFrame,
+    QTableWidget,
+    QTableWidgetItem,
 )
 
 
@@ -55,19 +57,48 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout()
 
         # ==========================
-        # 通貨ペア
+        # 監視する通貨ペア（複数）
         # ==========================
 
-        layout.addWidget(QLabel("通貨ペア"))
+        layout.addWidget(QLabel("監視する通貨ペア"))
 
-        self.currency = QComboBox()
-        self.currency.addItems([
+        add_row = QHBoxLayout()
+
+        self.new_currency = QComboBox()
+        self.new_currency.addItems([
             "EUR/USD",
             "USD/JPY",
             "GBP/USD",
             "BTC/USD",
         ])
-        layout.addWidget(self.currency)
+
+        self.new_horizon = QSpinBox()
+        self.new_horizon.setRange(5, 300)
+        self.new_horizon.setValue(20)
+        self.new_horizon.setSuffix("秒後")
+
+        add_btn = QPushButton("追加")
+        add_btn.clicked.connect(self.add_watch_item)
+
+        add_row.addWidget(self.new_currency)
+        add_row.addWidget(self.new_horizon)
+        add_row.addWidget(add_btn)
+
+        layout.addLayout(add_row)
+
+        self.watch_table = QTableWidget(0, 3)
+        self.watch_table.setHorizontalHeaderLabels(
+            ["通貨ペア", "時間軸(秒)", "有効"]
+        )
+        self.watch_table.horizontalHeader().setStretchLastSection(True)
+        self.watch_table.setMinimumHeight(150)
+        layout.addWidget(self.watch_table)
+
+        remove_btn = QPushButton("選択した行を削除")
+        remove_btn.clicked.connect(self.remove_selected_watch_item)
+        layout.addWidget(remove_btn)
+
+        layout.addWidget(self._separator())
 
         # ==========================
         # AIモデル
@@ -77,9 +108,8 @@ class SettingsDialog(QDialog):
 
         self.model = QComboBox()
         self.model.addItems([
-            "gemini-3.5-flash",
             "gemini-3.1-flash-lite",
-            "gemini-2.5-flash",
+            "gemini-3.5-flash",
         ])
         layout.addWidget(self.model)
 
@@ -142,13 +172,15 @@ class SettingsDialog(QDialog):
 
         layout.addLayout(line_token_row)
 
-        self.notify_on_buy_sell = QCheckBox("BUY/SELL判断が出たらLINEに通知する")
-        layout.addWidget(self.notify_on_buy_sell)
+        self.notify_on_prediction = QCheckBox(
+            "最低Confidence以上の予想が出たらLINEに通知する"
+        )
+        layout.addWidget(self.notify_on_prediction)
 
         layout.addWidget(self._separator())
 
         # ==========================
-        # リスク管理
+        # 資金管理（推奨ベット額）
         # ==========================
 
         layout.addWidget(QLabel("口座残高"))
@@ -159,7 +191,7 @@ class SettingsDialog(QDialog):
         self.account_balance.setSingleStep(1000)
         layout.addWidget(self.account_balance)
 
-        layout.addWidget(QLabel("1トレードあたりのリスク許容率"))
+        layout.addWidget(QLabel("1回の予想あたりのリスク許容率（推奨ベット額の計算に使用）"))
 
         self.risk_percent = QDoubleSpinBox()
         self.risk_percent.setRange(0, 100)
@@ -167,21 +199,18 @@ class SettingsDialog(QDialog):
         self.risk_percent.setSingleStep(0.5)
         layout.addWidget(self.risk_percent)
 
-        layout.addWidget(QLabel("基準 損切り幅"))
+        layout.addWidget(self._separator())
 
-        self.stop_loss_percent = QDoubleSpinBox()
-        self.stop_loss_percent.setRange(0.1, 100)
-        self.stop_loss_percent.setSuffix("%")
-        self.stop_loss_percent.setSingleStep(0.1)
-        layout.addWidget(self.stop_loss_percent)
+        # ==========================
+        # 定期監視の間隔
+        # ==========================
 
-        layout.addWidget(QLabel("基準 利確幅"))
+        layout.addWidget(QLabel("定期監視の間隔"))
 
-        self.take_profit_percent = QDoubleSpinBox()
-        self.take_profit_percent.setRange(0.1, 100)
-        self.take_profit_percent.setSuffix("%")
-        self.take_profit_percent.setSingleStep(0.1)
-        layout.addWidget(self.take_profit_percent)
+        self.monitor_interval = QSpinBox()
+        self.monitor_interval.setRange(3, 300)
+        self.monitor_interval.setSuffix("秒")
+        layout.addWidget(self.monitor_interval)
 
         content.setLayout(layout)
         scroll.setWidget(content)
@@ -219,13 +248,73 @@ class SettingsDialog(QDialog):
         line.setFrameShape(QFrame.HLine)
         return line
 
+    def add_watch_item(self):
+        """入力欄の内容で、監視リストに新しい行を追加する。"""
+        currency = self.new_currency.currentText()
+        horizon = self.new_horizon.value()
+        self._add_watch_row(currency, horizon, True)
+
+    def _add_watch_row(self, currency: str, horizon_seconds: int, enabled: bool):
+        """監視リストのテーブルに1行追加する。"""
+        row = self.watch_table.rowCount()
+        self.watch_table.insertRow(row)
+
+        self.watch_table.setItem(row, 0, QTableWidgetItem(currency))
+        self.watch_table.setItem(row, 1, QTableWidgetItem(str(horizon_seconds)))
+
+        enabled_checkbox = QCheckBox()
+        enabled_checkbox.setChecked(enabled)
+        self.watch_table.setCellWidget(row, 2, enabled_checkbox)
+
+    def remove_selected_watch_item(self):
+        """選択されている行を監視リストから削除する。"""
+        selected_rows = sorted(
+            {index.row() for index in self.watch_table.selectedIndexes()},
+            reverse=True,
+        )
+        for row in selected_rows:
+            self.watch_table.removeRow(row)
+
+    def _collect_watch_list(self) -> list:
+        """監視リストのテーブルの内容を、config保存用のリストにまとめる。"""
+        watch_list = []
+
+        for row in range(self.watch_table.rowCount()):
+            currency_item = self.watch_table.item(row, 0)
+            horizon_item = self.watch_table.item(row, 1)
+            enabled_widget = self.watch_table.cellWidget(row, 2)
+
+            currency = currency_item.text() if currency_item else ""
+
+            try:
+                horizon_seconds = int(horizon_item.text()) if horizon_item else 20
+            except ValueError:
+                horizon_seconds = 20
+
+            enabled = enabled_widget.isChecked() if enabled_widget else True
+
+            if currency:
+                watch_list.append({
+                    "currency": currency,
+                    "horizon_seconds": horizon_seconds,
+                    "enabled": enabled,
+                })
+
+        return watch_list
+
     def load_from_config(self):
         """Config の現在値をダイアログの各項目に反映する。"""
-        self.currency.setCurrentText(
-            self.config.get("currency", "EUR/USD")
-        )
+        self.watch_table.setRowCount(0)
+
+        for item in self.config.get("watch_list", []):
+            self._add_watch_row(
+                item.get("currency", ""),
+                item.get("horizon_seconds", 20),
+                item.get("enabled", True),
+            )
+
         self.model.setCurrentText(
-            self.config.get("ai_model", "gemini-3.5-flash")
+            self.config.get("ai_model", "gemini-3.1-flash-lite")
         )
         self.confidence.setValue(
             self.config.get("confidence", 70)
@@ -236,8 +325,8 @@ class SettingsDialog(QDialog):
         self.line_token.setText(
             self.config.get("line_channel_access_token", "")
         )
-        self.notify_on_buy_sell.setChecked(
-            bool(self.config.get("notify_on_buy_sell", True))
+        self.notify_on_prediction.setChecked(
+            bool(self.config.get("notify_on_prediction", True))
         )
         self.account_balance.setValue(
             float(self.config.get("account_balance", 100000))
@@ -245,11 +334,8 @@ class SettingsDialog(QDialog):
         self.risk_percent.setValue(
             float(self.config.get("risk_percent", 2.0))
         )
-        self.stop_loss_percent.setValue(
-            float(self.config.get("stop_loss_percent", 1.0))
-        )
-        self.take_profit_percent.setValue(
-            float(self.config.get("take_profit_percent", 2.0))
+        self.monitor_interval.setValue(
+            int(self.config.get("monitor_interval_seconds", 5))
         )
 
     def toggle_key_visibility(self):
@@ -273,16 +359,15 @@ class SettingsDialog(QDialog):
     def save_and_accept(self):
         """入力内容を Config に書き戻して保存し、ダイアログを閉じる。"""
         self.config.update({
-            "currency": self.currency.currentText(),
+            "watch_list": self._collect_watch_list(),
             "ai_model": self.model.currentText(),
             "confidence": self.confidence.value(),
             "api_key": self.api_key.text(),
             "line_channel_access_token": self.line_token.text(),
-            "notify_on_buy_sell": self.notify_on_buy_sell.isChecked(),
+            "notify_on_prediction": self.notify_on_prediction.isChecked(),
             "account_balance": self.account_balance.value(),
             "risk_percent": self.risk_percent.value(),
-            "stop_loss_percent": self.stop_loss_percent.value(),
-            "take_profit_percent": self.take_profit_percent.value(),
+            "monitor_interval_seconds": self.monitor_interval.value(),
         })
         self.config.save()
 

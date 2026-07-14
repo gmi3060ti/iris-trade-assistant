@@ -4,7 +4,7 @@ config.py
 IRIS Trade Assistant の設定管理モジュール。
 
 役割:
-    設定内容（APIキー、通貨ペア、AIモデル、Confidence、テーマ）を
+    設定内容（APIキー、監視する通貨ペアのリスト、AIモデル、Confidence、テーマ）を
     config.json に保存・読み込みする。
 
 使い方:
@@ -13,16 +13,18 @@ IRIS Trade Assistant の設定管理モジュール。
     config = Config()
 
     # 読み込み
-    currency = config.get("currency")
+    watch_list = config.get("watch_list")
 
     # 更新して保存
-    config.set("currency", "USD/JPY")
+    config.set("watch_list", [
+        {"currency": "USD/JPY", "horizon_seconds": 20, "enabled": True},
+        {"currency": "EUR/USD", "horizon_seconds": 30, "enabled": True},
+    ])
     config.save()
 
     # まとめて更新して保存
     config.update({
-        "currency": "USD/JPY",
-        "ai_model": "gemini-3.5-flash",
+        "ai_model": "gemini-3.1-flash-lite",
         "confidence": 80,
     })
 """
@@ -43,18 +45,24 @@ class Config:
     # デフォルト設定
     DEFAULTS = {
         "api_key": "",
-        "currency": "EUR/USD",
-        "ai_model": "gemini-3.5-flash",
+        "ai_model": "gemini-3.1-flash-lite",
         "confidence": 70,
         "theme": "dark",
+        # 監視する通貨ペアのリスト。
+        # 各要素: {"currency": "USD/JPY", "horizon_seconds": 20, "enabled": True}
+        # currencyからスペース・スラッシュを除いた文字列が、
+        # 対応するTradingViewウィンドウを見分けるキーワードとして使われる
+        # （例: "USD/JPY" -> "USDJPY"）。
+        "watch_list": [
+            {"currency": "USD/JPY", "horizon_seconds": 20, "enabled": True},
+        ],
         # LINE通知（Messaging API）
         "line_channel_access_token": "",
-        "notify_on_buy_sell": True,
+        "notify_on_prediction": True,
+        "monitor_interval_seconds": 5,
         # リスク管理
         "account_balance": 100000,
         "risk_percent": 2.0,
-        "stop_loss_percent": 1.0,
-        "take_profit_percent": 2.0,
     }
 
     def __init__(self, path: str = "config.json"):
@@ -94,6 +102,21 @@ class Config:
                 data[key] = value
                 updated = True
 
+        # 旧バージョン（単一のcurrency設定）からの移行
+        if "currency" in data and "watch_list" in data:
+            old_currency = data.pop("currency")
+            # watch_listがまだデフォルトのまま（＝実質未設定）なら、
+            # 旧設定の通貨ペアを引き継ぐ
+            if data["watch_list"] == self.DEFAULTS["watch_list"]:
+                data["watch_list"] = [
+                    {
+                        "currency": old_currency,
+                        "horizon_seconds": 20,
+                        "enabled": True,
+                    }
+                ]
+            updated = True
+
         if updated:
             self._write(data)
 
@@ -131,6 +154,19 @@ class Config:
     def all(self) -> dict:
         """設定内容をすべて取得する（辞書のコピーを返す）。"""
         return self.data.copy()
+
+    @staticmethod
+    def currency_to_keyword(currency: str) -> str:
+        """
+        通貨ペア表記からウィンドウ検出用キーワードを作る。
+
+        例: "USD/JPY" -> "USDJPY"
+
+        TradingViewのウィンドウタイトルには通常
+        スラッシュ無しのティッカー表記（USDJPYなど）が含まれるため、
+        この形式に変換して検出に使う。
+        """
+        return currency.replace("/", "").replace(" ", "").upper()
 
 
 if __name__ == "__main__":

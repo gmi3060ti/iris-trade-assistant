@@ -136,32 +136,30 @@ class LineNotifier:
             }
 
     @staticmethod
-    def build_signal_message(currency: str, result: dict) -> str:
+    def build_signal_message(result: dict) -> str:
         """
         解析結果からLINE通知用のメッセージ文を組み立てる。
 
         Args:
-            currency: 通貨ペア（例: "USD/JPY"）
-            result: analyzer.analyze() や scoring の結果を含む辞書。
-                trend / confidence / recommendation / reason を使う。
-                stop_loss_percent / take_profit_percent があれば追記する。
+            result: analyzer.analyze() の結果に currency / horizon_seconds を
+                加えた辞書。direction / confidence / reason / currency /
+                horizon_seconds を使う。
+
+        例:
+            【USD/JPY　20秒後　High】
+            確信度: 82%
+            理由: 上昇トレンド継続
         """
+        direction_label = "High" if result.get("direction") == "HIGH" else "Low"
+
         lines = [
-            "【IRIS Trade Assistant】",
-            f"通貨: {currency}",
-            f"判断: {result.get('recommendation', '-')}",
-            f"トレンド: {result.get('trend', '-')}",
+            f"【{result.get('currency', '-')}　"
+            f"{result.get('horizon_seconds', '?')}秒後　{direction_label}】",
             f"確信度: {result.get('confidence', 0)}%",
         ]
 
         if result.get("reason"):
             lines.append(f"理由: {result['reason']}")
-
-        if "stop_loss_percent" in result and "take_profit_percent" in result:
-            lines.append(
-                f"目安 損切り: -{result['stop_loss_percent']}% "
-                f"/ 利確: +{result['take_profit_percent']}%"
-            )
 
         return "\n".join(lines)
 
@@ -175,11 +173,12 @@ if __name__ == "__main__":
     notifier = LineNotifier(cfg)
 
     test_result = {
-        "trend": "UP",
+        "currency": "USD/JPY",
+        "direction": "HIGH",
         "confidence": 85,
-        "recommendation": "BUY",
         "reason": "テスト通知です",
+        "horizon_seconds": 20,
     }
 
-    message = LineNotifier.build_signal_message("USD/JPY", test_result)
+    message = LineNotifier.build_signal_message(test_result)
     print(notifier.send(message))

@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QFrame,
     QGroupBox,
+    QTableWidget,
+    QTableWidgetItem,
 )
 
 from settings import SettingsDialog
@@ -33,9 +35,10 @@ class MainWindow(QWidget):
         self.trade_logger = TradeLogger()
         self.notifier = LineNotifier(self.config)
         self.risk = RiskCalculator(self.config)
+        self._last_notified_direction = {}  # {"USD/JPY": "HIGH", ...}
 
         self.setWindowTitle("IRIS Trade Assistant β1")
-        self.resize(800, 820)
+        self.resize(860, 880)
 
         main_layout = QVBoxLayout()
 
@@ -71,42 +74,21 @@ class MainWindow(QWidget):
 
         self.time_label = QLabel()
 
-        self.currency = QLabel(
-            f"通貨 : {self.config.get('currency', 'EUR/USD')}"
-        )
-
-        self.trend = QLabel(
-            "トレンド : WAIT"
-        )
-
-        self.score = QLabel(
-            "スコア : 0 / 100"
-        )
-
         self.winrate = QLabel(
             "勝率 : - (0勝0敗 / 判定待ち0件)"
         )
 
-        for widget in (
-            self.time_label,
-            self.currency,
-            self.trend,
-            self.score,
-            self.winrate,
-        ):
-            widget.setStyleSheet(
-                "font-size:15px;"
-            )
-
+        for widget in (self.time_label, self.winrate):
+            widget.setStyleSheet("font-size:15px;")
             main_layout.addWidget(widget)
 
         main_layout.addSpacing(10)
 
         # ==========================
-        # チャート
+        # チャート（直近にキャプチャした通貨ペアを表示）
         # ==========================
 
-        chart_box = QGroupBox("📈 Chart")
+        chart_box = QGroupBox("📈 Chart（直近のキャプチャ）")
 
         chart_layout = QVBoxLayout()
 
@@ -118,7 +100,7 @@ class MainWindow(QWidget):
             Qt.AlignCenter
         )
 
-        self.chart_label.setMinimumHeight(300)
+        self.chart_label.setMinimumHeight(240)
 
         self.chart_label.setStyleSheet("""
             border:1px solid gray;
@@ -131,33 +113,27 @@ class MainWindow(QWidget):
         chart_box.setLayout(chart_layout)
 
         main_layout.addWidget(chart_box)
-        
+
         # ==========================
-        # AI Analysis
+        # 通貨ペアごとの予想一覧
         # ==========================
 
-        analysis_box = QGroupBox("🤖 AI Analysis")
+        predictions_box = QGroupBox("🤖 AI Predictions")
 
-        analysis_layout = QVBoxLayout()
+        predictions_layout = QVBoxLayout()
 
-        self.ai_trend = QLabel("Trend : WAIT")
-        self.ai_confidence = QLabel("Confidence : 0%")
-        self.ai_recommendation = QLabel("Recommendation : -")
-        self.ai_reason = QLabel("Reason : -")
-        self.ai_reason.setWordWrap(True)
+        self.predictions_table = QTableWidget(0, 6)
+        self.predictions_table.setHorizontalHeaderLabels([
+            "通貨ペア", "予想", "確信度", "理由", "判定", "更新時刻",
+        ])
+        self.predictions_table.horizontalHeader().setStretchLastSection(True)
+        self.predictions_table.setMinimumHeight(180)
 
-        for widget in (
-            self.ai_trend,
-            self.ai_confidence,
-            self.ai_recommendation,
-            self.ai_reason,
-        ):
-            widget.setStyleSheet("font-size:14px;")
-            analysis_layout.addWidget(widget)
+        predictions_layout.addWidget(self.predictions_table)
 
-        analysis_box.setLayout(analysis_layout)
+        predictions_box.setLayout(predictions_layout)
 
-        main_layout.addWidget(analysis_box)
+        main_layout.addWidget(predictions_box)
 
         main_layout.addSpacing(10)
 
@@ -167,7 +143,7 @@ class MainWindow(QWidget):
 
         self.start_btn = QPushButton("▶ Start Monitor")
         self.stop_btn = QPushButton("■ Stop")
-        self.capture_btn = QPushButton("📸 Capture")
+        self.capture_btn = QPushButton("📸 Capture（先頭の有効な通貨ペアのみ）")
         self.setting_btn = QPushButton("⚙ Settings")
 
         for button in (
@@ -231,6 +207,7 @@ class MainWindow(QWidget):
         self.timer.start(1000)
 
         self.update_time()
+        self._update_winrate_label()
 
         self.add_log("IRIS 起動")
         self.add_log("待機中...")
@@ -243,16 +220,28 @@ class MainWindow(QWidget):
         now = datetime.now().strftime("%H:%M:%S")
         self.log.append(f"[{now}] {message}")
 
+    # ==========================
+    # 監視の開始・停止
+    # ==========================
+
     def start_monitor(self):
         if self.monitor_worker is not None:
             return  # すでに監視中
 
-        capture = ScreenCapture()
+        watch_list = self.config.get("watch_list", [])
+        enabled_pairs = [w for w in watch_list if w.get("enabled", True)]
+
+        if not enabled_pairs:
+            self.add_log("監視する通貨ペアが設定されていません（Settingsで追加してください）")
+            return
+
+        interval = int(self.config.get("monitor_interval_seconds", 5))
 
         self.monitor_worker = MonitorWorker(
-            capture, self.analyzer, interval_seconds=5
+            self.analyzer, self.config, self.trade_logger, interval_seconds=interval
         )
         self.monitor_worker.result_ready.connect(self.on_monitor_result)
+        self.monitor_worker.outcome_ready.connect(self.on_monitor_outcome)
         self.monitor_worker.error_occurred.connect(self.on_monitor_error)
         self.monitor_worker.start()
 
@@ -262,7 +251,8 @@ class MainWindow(QWidget):
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
 
-        self.add_log("監視開始（5秒ごとに自動解析）")
+        pair_names = "、".join(w["currency"] for w in enabled_pairs)
+        self.add_log(f"監視開始（{interval}秒間隔 / 対象: {pair_names}）")
 
     def stop_monitor(self):
         if self.monitor_worker is not None:
@@ -278,14 +268,6 @@ class MainWindow(QWidget):
 
         self.add_log("監視停止")
 
-    def on_monitor_result(self, result):
-        """MonitorWorkerから結果が届くたびに呼ばれる（メインスレッド上で実行）。"""
-        self._display_result(result, is_auto=True)
-
-    def on_monitor_error(self, message):
-        """MonitorWorker内で想定外のエラーが起きた場合に呼ばれる。"""
-        self.add_log(f"監視スレッドエラー: {message}")
-
     def closeEvent(self, event):
         """アプリ終了時に監視スレッドが動いていれば安全に停止する。"""
         if self.monitor_worker is not None:
@@ -295,44 +277,102 @@ class MainWindow(QWidget):
 
         event.accept()
 
+    # ==========================
+    # 監視スレッドからのイベント
+    # ==========================
+
+    def on_monitor_result(self, result):
+        """MonitorWorkerから新しい予想が届くたびに呼ばれる。"""
+        self._handle_prediction(result, is_auto=True)
+
+    def on_monitor_outcome(self, outcome):
+        """MonitorWorkerから予想の正解/不正解が届くたびに呼ばれる。"""
+        currency = outcome.get("currency", "")
+        result_label = outcome.get("outcome", "UNKNOWN")
+
+        self._update_prediction_row(currency, judgment=result_label)
+        self._update_winrate_label()
+
+        self.add_log(
+            f"[判定] {currency}: {result_label} "
+            f"(予想 {outcome.get('predicted_direction')} / "
+            f"予想時価格 {outcome.get('predicted_price')} → "
+            f"実際 {outcome.get('actual_price')})"
+        )
+
+    def on_monitor_error(self, message):
+        """MonitorWorker内で想定外のエラーが起きた場合に呼ばれる。"""
+        self.add_log(f"監視スレッドエラー: {message}")
+
+    # ==========================
+    # Settings
+    # ==========================
+
     def open_settings(self):
         dialog = SettingsDialog(self.config)
 
         if dialog.exec():
-            self.currency.setText(
-                f"通貨 : {self.config.get('currency')}"
-            )
-
             self.add_log("設定を保存しました")
 
-    def capture_screen(self):
-        capture = ScreenCapture()
+    # ==========================
+    # 手動キャプチャ（先頭の有効な通貨ペアのみ、その場で1回だけ解析）
+    # ==========================
 
+    def capture_screen(self):
+        watch_list = self.config.get("watch_list", [])
+        enabled_pairs = [w for w in watch_list if w.get("enabled", True)]
+
+        if not enabled_pairs:
+            self.add_log("監視する通貨ペアが設定されていません（Settingsで追加してください）")
+            return
+
+        item = enabled_pairs[0]
+        currency = item["currency"]
+        horizon = int(item.get("horizon_seconds", 20))
+        keyword = Config.currency_to_keyword(currency)
+
+        capture = ScreenCapture(window_keyword=keyword)
         capture_result = capture.capture()
         image_path = capture_result["path"]
 
         if capture_result["used_window_capture"]:
-            self.add_log("TradingViewウィンドウを検出してキャプチャしました")
+            self.add_log(f"{currency}: ウィンドウを検出してキャプチャしました")
         else:
-            self.add_log("TradingViewウィンドウが見つからず、画面全体をキャプチャしました")
+            self.add_log(f"{currency}: ウィンドウが見つからず、画面全体をキャプチャしました")
 
-        self.add_log("AI解析中...")
+        self.add_log(f"{currency}: AI解析中...")
 
-        analysis = self.analyzer.analyze(image_path)
+        analysis = self.analyzer.analyze(image_path, horizon_seconds=horizon)
 
         combined = dict(analysis)
+        combined["currency"] = currency
+        combined["horizon_seconds"] = horizon
         combined["image_path"] = image_path
         combined["used_window_capture"] = capture_result["used_window_capture"]
 
-        self._display_result(combined)
+        self._handle_prediction(combined, is_auto=False, log_to_history=True)
 
-    def _display_result(self, result, is_auto=False):
-        """
-        解析結果をGUIに反映する。
+        self.add_log(
+            "注意: 手動Captureでは、この予想が当たったかどうかの自動判定は行われません"
+            "（自動判定はStart Monitorでの継続監視中のみ動作します）"
+        )
 
-        手動Capture（capture_screen）と自動監視（on_monitor_result）の
-        両方から呼ばれる共通処理。
+    # ==========================
+    # 予想結果の反映（共通処理）
+    # ==========================
+
+    def _handle_prediction(self, result, is_auto=False, log_to_history=False):
         """
+        1件の予想結果をGUIに反映する。
+
+        Args:
+            result: analyzer.analyze()の結果 + currency / horizon_seconds /
+                image_path / used_window_capture を含む辞書
+            is_auto: MonitorWorker経由（自動監視）ならTrue
+            log_to_history: Trueの場合、ここでTradeLoggerに記録する
+                （MonitorWorker側は自身で記録済みなので、on_monitor_resultからはFalseで呼ぶ）
+        """
+        currency = result.get("currency", "-")
         image_path = result.get("image_path")
 
         if image_path:
@@ -348,83 +388,120 @@ class MainWindow(QWidget):
 
         prefix = "[自動] " if is_auto else ""
 
-        if result["error"]:
-            self.ai_trend.setText("Trend : -")
-            self.ai_confidence.setText("Confidence : -")
-            self.ai_recommendation.setText("Recommendation : -")
-            self.ai_reason.setText("Reason : -")
-
-            self.add_log(f"{prefix}AI解析エラー: {result['error']}")
+        if result.get("error"):
+            self._update_prediction_row(currency, reason=f"エラー: {result['error']}")
+            self.add_log(f"{prefix}{currency}: AI解析エラー: {result['error']}")
             return
 
-        self.ai_trend.setText(f"Trend : {result['trend']}")
-        self.ai_confidence.setText(f"Confidence : {result['confidence']}%")
-        self.ai_recommendation.setText(
-            f"Recommendation : {result['recommendation']}"
-        )
-        self.ai_reason.setText(f"Reason : {result['reason']}")
+        direction = result["direction"]
+        confidence = result["confidence"]
+        reason = result["reason"]
+        horizon_seconds = result.get("horizon_seconds", 20)
 
-        # 画面上部のトレンド表示にも反映
-        self.trend.setText(f"トレンド : {result['recommendation']}")
-        self.score.setText(f"スコア : {result['confidence']} / 100")
+        self._update_prediction_row(
+            currency,
+            direction=direction,
+            confidence=confidence,
+            reason=reason,
+            judgment="判定待ち",
+        )
+
+        direction_label = "High" if direction == "HIGH" else "Low"
 
         self.add_log(
-            f"{prefix}AI解析完了: {result['recommendation']} "
-            f"(Confidence {result['confidence']}%)"
+            f"{prefix}{currency}: {horizon_seconds}秒後 {direction_label} "
+            f"予想（確信度 {confidence}%）"
         )
 
-        # ==========================
-        # リスク目安の計算
-        # ==========================
-
-        risk_levels = self.risk.suggest_risk_levels(
-            result["recommendation"], result["confidence"]
-        )
-
-        if result["recommendation"] in ("BUY", "SELL"):
-            self.add_log(
-                f"目安 損切り: -{risk_levels['stop_loss_percent']}% "
-                f"/ 利確: +{risk_levels['take_profit_percent']}% "
-                f"(リスクリワード比 1:{risk_levels['risk_reward_ratio']})"
+        if log_to_history:
+            self.trade_logger.log(
+                currency=currency,
+                direction=direction,
+                confidence=confidence,
+                reason=reason,
+                price=result.get("price"),
+                horizon_seconds=horizon_seconds,
+                image_path=image_path,
             )
+            self._update_winrate_label()
 
         # ==========================
-        # 履歴保存
+        # LINE通知
         # ==========================
+        #
+        # 監視間隔（数秒〜数十秒ごと）で毎回通知すると、
+        # LINEの無料枠（月200通）をすぐに使い切ってしまうため、
+        # 以下の両方を満たすときだけ通知する。
+        #   1. Settingsの「最低Confidence」以上の予想である
+        #   2. 前回そのペアで通知した方向（High/Low）から変わった
+        #      （同じ方向が続く間は連続通知しない）
 
-        self.trade_logger.log(
-            currency=self.config.get("currency"),
-            trend=result["trend"],
-            confidence=result["confidence"],
-            recommendation=result["recommendation"],
-            reason=result["reason"],
-            image_path=image_path,
-            stop_loss_percent=risk_levels["stop_loss_percent"],
-            take_profit_percent=risk_levels["take_profit_percent"],
+        min_confidence = int(self.config.get("confidence", 70))
+        previous_direction = self._last_notified_direction.get(currency)
+
+        should_notify = (
+            self.config.get("notify_on_prediction", True)
+            and confidence >= min_confidence
+            and direction != previous_direction
         )
 
-        self._update_winrate_label()
+        if should_notify:
+            bet_info = self.risk.calculate_max_loss()
 
-        # ==========================
-        # LINE通知（BUY/SELL時のみ）
-        # ==========================
-
-        if (
-            result["recommendation"] in ("BUY", "SELL")
-            and self.config.get("notify_on_buy_sell", True)
-        ):
-            message = LineNotifier.build_signal_message(
-                self.config.get("currency"),
-                {**result, **risk_levels},
-            )
+            message = LineNotifier.build_signal_message(result)
+            message += f"\n推奨ベット額目安: {bet_info['max_loss_amount']:,.0f}"
 
             # 注意: この呼び出しはLINEへの送信が完了するまでUIをブロックします。
             send_result = self.notifier.send(message)
 
             if send_result["success"]:
-                self.add_log("LINEに通知を送信しました")
+                self.add_log(f"{currency}: LINEに通知を送信しました")
+                self._last_notified_direction[currency] = direction
             else:
-                self.add_log(f"LINE通知エラー: {send_result['error']}")
+                self.add_log(f"{currency}: LINE通知エラー: {send_result['error']}")
+
+    def _update_prediction_row(
+        self,
+        currency,
+        direction=None,
+        confidence=None,
+        reason=None,
+        judgment=None,
+    ):
+        """
+        予想一覧テーブルの、指定した通貨ペアの行を更新する。
+        該当する行が無ければ新規に追加する。
+        """
+        row = None
+
+        for r in range(self.predictions_table.rowCount()):
+            item = self.predictions_table.item(r, 0)
+            if item and item.text() == currency:
+                row = r
+                break
+
+        if row is None:
+            row = self.predictions_table.rowCount()
+            self.predictions_table.insertRow(row)
+            self.predictions_table.setItem(row, 0, QTableWidgetItem(currency))
+            for col in range(1, 6):
+                self.predictions_table.setItem(row, col, QTableWidgetItem(""))
+
+        if direction is not None:
+            label = "High" if direction == "HIGH" else ("Low" if direction == "LOW" else "-")
+            self.predictions_table.setItem(row, 1, QTableWidgetItem(label))
+
+        if confidence is not None:
+            self.predictions_table.setItem(row, 2, QTableWidgetItem(f"{confidence}%"))
+
+        if reason is not None:
+            self.predictions_table.setItem(row, 3, QTableWidgetItem(reason))
+
+        if judgment is not None:
+            self.predictions_table.setItem(row, 4, QTableWidgetItem(judgment))
+
+        now = datetime.now().strftime("%H:%M:%S")
+        self.predictions_table.setItem(row, 5, QTableWidgetItem(now))
 
     def _update_winrate_label(self):
         """履歴から勝率を再計算し、勝率ラベルを更新する。"""
