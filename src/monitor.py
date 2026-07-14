@@ -7,9 +7,9 @@ IRIS Trade Assistant の定期監視モジュール。
     config の watch_list（監視したい通貨ペアのリスト）を順番に処理し、
     それぞれについて「N秒後にHigh/Low」の予想を行う。
 
-    予想のたびに TradeLogger へ記録し、指定された時間（horizon_seconds）が
-    経過したタイミングで再度キャプチャ・価格読み取りを行い、
-    予想が当たっていたかを自動判定して記録する。
+    予想は毎回 TradeLogger へ記録するが、正解/不正解の自動判定は
+    Settingsの「最低Confidence」以上の予想に対してのみ行う
+    （閾値未満の予想は記録はされるが、判定は行わずPENDINGのままになる）。
 
     GUIの操作をブロックしないよう QThread 上で実行し、
     結果は Qt のシグナル経由でメインスレッド（GUI）に通知する。
@@ -141,8 +141,15 @@ class MonitorWorker(QThread):
                     image_path=image_path,
                 )
 
-                # 価格が読み取れた予想だけ、後で自動判定できる
-                if analysis["price"] is not None:
+                # Settingsの「最低Confidence」以上の予想だけ、
+                # 後で正解/不正解を自動判定する。
+                # （閾値未満の予想は、記録はされるが判定は行わずPENDINGのまま）
+                min_confidence = int(self.config.get("confidence", 70))
+
+                if (
+                    analysis["price"] is not None
+                    and analysis["confidence"] >= min_confidence
+                ):
                     self._pending.append({
                         "entry_id": entry_id,
                         "currency": currency,
